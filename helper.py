@@ -24,17 +24,44 @@ import os
 import time
 import glob
 
-plt.rcParams.update({'font.size': 24})
-plt.rcParams["figure.figsize"] = (10, 7)
-plt.rcParams["font.weight"] = "bold"
-plt.rcParams["axes.labelweight"] = "bold"
-mode_velocities = []
+
 def read8byte(x):
     return struct.unpack('<hhhh', x)
 
+def dopplerFFT(rangeResult):  #
+    windowedBins2D = rangeResult * np.reshape(np.hamming(cfg.NUM_CHIRPS), (1, 1, -1, 1))
+    dopplerFFTResult = np.fft.fft(windowedBins2D, axis=2)
+    dopplerFFTResult = np.fft.fftshift(dopplerFFTResult, axes=2)
+    return dopplerFFTResult
+
+
+def generate_velocity(rangeResult, info_dict):
+    rangeResult = np.stack([rangeResult[0::3, ...], rangeResult[1::3, ...], rangeResult[2::3, ...]])
+    rangeResult = rangeResult.transpose(0,2,1,3)
+    range_result_absnormal_split = []
+    for i in range(cfg.NUM_TX):
+        for j in range(cfg.NUM_RX):
+            r_r = np.abs(rangeResult[i][j])
+            r_r[:, 0:10] = 0
+            min_val = np.min(r_r)
+            max_val = np.max(r_r)
+            r_r_normalise = (r_r - min_val) / (max_val - min_val) * 1000
+            range_result_absnormal_split.append(r_r_normalise)
+    range_abs_combined_nparray = np.zeros((cfg.NUM_CHIRPS, cfg.NUM_ADC_SAMPLES))
+    for ele in range_result_absnormal_split:
+        range_abs_combined_nparray += ele
+    range_abs_combined_nparray /= (cfg.NUM_TX * cfg.NUM_RX)
+    range_abs_combined_nparray_collapsed = np.sum(range_abs_combined_nparray, axis=0) / cfg.NUM_CHIRPS
+    peaks, _ = find_peaks(range_abs_combined_nparray_collapsed)
+    intensities_peaks = [[range_abs_combined_nparray_collapsed[idx], idx] for idx in peaks]
+    peaks = [i[1] for i in sorted(intensities_peaks, reverse=True)[:3]]
+    dopplerResult = dopplerFFT(rangeResult)
+    vel_array_frame = np.array(get_velocity(rangeResult, peaks, info_dict)).flatten()
+    mean_velocity = np.median(vel_array_frame)
+    return mean_velocity
+        
 def frame_reshape(frames, NUM_FRAMES):
     adc_data = frames.reshape(NUM_FRAMES, -1)
-    print(adc_data.shape)
     all_data = np.apply_along_axis(DCA1000.organize, 1, adc_data, num_chirps=cfg.NUM_CHIRPS*cfg.NUM_TX, num_rx=cfg.NUM_RX, num_samples=cfg.NUM_ADC_SAMPLES)
     return all_data
 
@@ -146,12 +173,12 @@ def get_phase(r,i):
 
 def solve_equation(phase_cur_frame,info_dict):
     phase_diff=[]
-    for soham in range (1,len(phase_cur_frame)):
-        phase_diff.append(phase_cur_frame[soham]-phase_cur_frame[soham-1])
+    for iter in range (1,len(phase_cur_frame)):
+        phase_diff.append(phase_cur_frame[iter]-phase_cur_frame[iter-1])
     Tp=cfg.Tp
     Tc=cfg.Tc
-    L=info_dict[' L'][0]/100
-    r0=info_dict[' R'][0]/100
+    L=info_dict['L'][0]/100
+    r0=info_dict['R'][0]/100
     roots_of_frame=[]
     for i,val in enumerate(phase_diff):
         c=(phase_diff[i]*0.001/3.14)/(3*(Tp+Tc))
@@ -175,7 +202,7 @@ def solve_equation(phase_cur_frame,info_dict):
 def get_velocity_antennawise(range_FFT_,peak, info_dict):
         phase_per_antenna=[]
         vel_peak=[]
-        for k in range(0,cfg.LOOPS_PER_FRAME):
+        for k in range(0,cfg.NUM_CHIRPS):
             r = range_FFT_[k][peak].real
             i = range_FFT_[k][peak].imag
             phase=get_phase(r,i)
@@ -197,32 +224,6 @@ def get_velocity(rangeResult,range_peaks,info_dict):
     return vel_array_frame
 
 
-def find_peaks_in_range_data(rangeResult, pointcloud_processcfg, intensity_threshold):
-    range_result_absnormal_split = []
-    for i in range(pointcloud_processcfg.frameConfig.numTxAntennas):
-        for j in range(pointcloud_processcfg.frameConfig.numRxAntennas):
-            r_r = np.abs(rangeResult[i][j])
-            r_r[:,0:10] = 0
-            min_val = np.min(r_r)
-            max_val = np.max(r_r)
-            r_r_normalise = (r_r - min_val) / (max_val - min_val) * 1000
-            range_result_absnormal_split.append(r_r_normalise)
-
-    range_abs_combined_nparray = np.zeros((pointcloud_processcfg.frameConfig.numLoopsPerFrame, pointcloud_processcfg.frameConfig.numADCSamples))
-    for ele in range_result_absnormal_split:
-        range_abs_combined_nparray += ele
-    range_abs_combined_nparray /= (pointcloud_processcfg.frameConfig.numTxAntennas * pointcloud_processcfg.frameConfig.numRxAntennas)
-    
-    range_abs_combined_nparray_collapsed = np.sum(range_abs_combined_nparray, axis=0) / pointcloud_processcfg.frameConfig.numLoopsPerFrame
-    peaks, _ = find_peaks(range_abs_combined_nparray_collapsed)
-
-    peaks_min_intensity_threshold = []
-    for indices in peaks:
-        if range_abs_combined_nparray_collapsed[indices] > intensity_threshold:
-            peaks_min_intensity_threshold.append(indices)
-    
-    return peaks_min_intensity_threshold
-
 def check_consistency_of_frame(previous_peaks, current_peaks, threshold):
     if not any(any(abs(c - p) <= threshold for c in current_peaks) for p in previous_peaks):
         return False
@@ -232,20 +233,6 @@ def get_consistent_peaks(previous_peaks, current_peaks, threshold):
     consistent_peaks = [current_peaks[i] for i, val in enumerate(any(abs(c-p) <= threshold for p in previous_peaks) for c in current_peaks) if val]
     return consistent_peaks
 
-def run_data_read_only_sensor(info_dict):
-    filename = 'datasets/'+info_dict["filename"][0]
-    command =f'python data_read_only_sensor.py {filename} {info_dict[" Nf"][0]}'
-    process = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    stdout = process.stdout
-    stderr = process.stderr
-
-def call_destructor(info_dict):
-    file_name="datasets/only_sensor"+info_dict["filename"][0]
-    command =f'rm {file_name}'
-    process = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    stdout = process.stdout
-    stderr = process.stderr
-
 
 def get_mode_velocity(velocity_array_framewise):
     vel_array_all = []
@@ -254,3 +241,103 @@ def get_mode_velocity(velocity_array_framewise):
             vel_array_all.append(velocity)
     vel_mode = statistics.mode(vel_array_all)
     return vel_mode
+
+def generate_pcd_and_speed(file):
+    file_name = file.split('/')[-1]
+    info_dict = get_info(file_name)
+    NUM_FRAMES = info_dict['Nf'][0]
+    with open(file, 'rb') as ADCBinFile: 
+        frames = np.frombuffer(ADCBinFile.read(cfg.FRAME_SIZE*4*NUM_FRAMES), dtype=np.uint16)
+    all_data = frame_reshape(frames, NUM_FRAMES)
+    range_azimuth = np.zeros((cfg.ANGLE_BINS, cfg.BINS_PROCESSED))
+    num_vec, steering_vec = dsp.gen_steering_vec(cfg.ANGLE_RANGE, cfg.ANGLE_RES, cfg.VIRT_ANT)
+    tracker = EKF()
+    count = 0
+    pcd_datas = []
+    velocities = []
+    for adc_data in all_data:
+        count+=1
+        print("Frame No. ", count)
+        radar_cube = dsp.range_processing(adc_data)
+        mean = radar_cube.mean(0)                 
+        radar_cube = radar_cube - mean  
+        velocity = generate_velocity(radar_cube, info_dict)
+        # --- capon beamforming
+        beamWeights   = np.zeros((cfg.VIRT_ANT, cfg.BINS_PROCESSED), dtype=np.complex128)
+        radar_cube = np.concatenate((radar_cube[0::3,...], radar_cube[1::3,...], radar_cube[2::3,...]), axis=1)
+        # Note that when replacing with generic doppler estimation functions, radarCube is interleaved and
+        # has doppler at the last dimension.
+        for i in range(cfg.BINS_PROCESSED):
+            range_azimuth[:,i], beamWeights[:,i] = dsp.aoa_capon(radar_cube[:, :, i].T, steering_vec, magnitude=True)
+        
+        """ 3 (Object Detection) """
+        heatmap_log = np.log2(range_azimuth)
+        
+        # --- cfar in azimuth direction
+        first_pass, _ = np.apply_along_axis(func1d=dsp.ca_,
+                                            axis=0,
+                                            arr=heatmap_log,
+                                            l_bound=1.5,
+                                            guard_len=4,
+                                            noise_len=16)
+        
+        # --- cfar in range direction
+        second_pass, noise_floor = np.apply_along_axis(func1d=dsp.ca_,
+                                                    axis=0,
+                                                    arr=heatmap_log.T,
+                                                    l_bound=2.5,
+                                                    guard_len=4,
+                                                    noise_len=16)
+
+        # --- classify peaks and caclulate snrs
+        noise_floor = noise_floor.T
+        first_pass = (heatmap_log > first_pass)
+        second_pass = (heatmap_log > second_pass.T)
+        peaks = (first_pass & second_pass)
+        peaks[:cfg.SKIP_SIZE, :] = 0
+        peaks[-cfg.SKIP_SIZE:, :] = 0
+        peaks[:, :cfg.SKIP_SIZE] = 0
+        peaks[:, -cfg.SKIP_SIZE:] = 0
+        pairs = np.argwhere(peaks)
+        azimuths, ranges = pairs.T
+        snrs = heatmap_log[pairs[:,0], pairs[:,1]] - noise_floor[pairs[:,0], pairs[:,1]]
+
+        """ 4 (Doppler Estimation) """
+
+        # --- get peak indices
+        # beamWeights should be selected based on the range indices from CFAR.
+        dopplerFFTInput = radar_cube[:, :, ranges]
+        beamWeights  = beamWeights[:, ranges]
+
+        # --- estimate doppler values
+        # For each detected object and for each chirp combine the signals from 4 Rx, i.e.
+        # For each detected object, matmul (numChirpsPerFrame, numRxAnt) with (numRxAnt) to (numChirpsPerFrame)
+        dopplerFFTInput = np.einsum('ijk,jk->ik', dopplerFFTInput, beamWeights)
+        if not dopplerFFTInput.shape[-1]:
+            continue
+        dopplerEst = np.fft.fft(dopplerFFTInput, axis=0)
+        dopplerEst = np.argmax(dopplerEst, axis=0)
+        dopplerEst[dopplerEst[:]>=cfg.NUM_CHIRPS/2] -= cfg.NUM_CHIRPS
+        
+        """ 5 (Extended Kalman Filter) """
+
+        # --- convert bins to units
+        ranges = ranges * cfg.RANGE_RESOLUTION
+        azimuths = (azimuths - (cfg.ANGLE_BINS // 2)) * (np.pi / 180)
+        dopplers = dopplerEst * cfg.DOPPLER_RESOLUTION
+        snrs = snrs
+        
+        # --- put into EKF
+        tracker.update_point_cloud(ranges, azimuths, dopplers, snrs)
+        targetDescr, tNum = tracker.step()
+        frame_pcd = np.zeros((len(tracker.point_cloud),6))
+        for point_cloud, idx in zip(tracker.point_cloud, range(len(tracker.point_cloud))):
+            frame_pcd[idx,0] = -np.sin(point_cloud.angle) * point_cloud.range
+            frame_pcd[idx,1] = np.cos(point_cloud.angle) * point_cloud.range
+            frame_pcd[idx,2] = point_cloud.doppler 
+            frame_pcd[idx,3] = point_cloud.snr
+            frame_pcd[idx,4] = point_cloud.range
+            frame_pcd[idx,5] = point_cloud.angle
+        pcd_datas.append(frame_pcd)
+        velocities.append(velocity)
+    return np.array(pcd_datas), np.array(velocities)
