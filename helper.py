@@ -35,9 +35,19 @@ def dopplerFFT(rangeResult):  #
     return dopplerFFTResult
 
 
-def generate_velocity(rangeResult, info_dict):
-    rangeResult = np.stack([rangeResult[0::3, ...], rangeResult[1::3, ...], rangeResult[2::3, ...]])
-    rangeResult = rangeResult.transpose(0,2,1,3)
+def find_l_r(peaks, frame_pcd):
+    ranges = np.array(peaks)*cfg.RANGE_RESOLUTION
+    varticle_dist = []
+    for range in ranges:
+        filtered_points = frame_pcd[np.abs(frame_pcd[:, 4] - range) <= 0.05]
+        y = np.cos(filtered_points[:,5]) * filtered_points[:,4]
+        varticle_dist.append(np.median(y))
+    return ranges, np.array(varticle_dist)
+
+
+def generate_velocity(rangeResult, frame_pcd, veloity_peaks):
+    rangeResult = rangeResult.reshape(182, 3, 4, 256)
+    rangeResult = rangeResult.transpose(1,2,0,3)
     range_result_absnormal_split = []
     for i in range(cfg.NUM_TX):
         for j in range(cfg.NUM_RX):
@@ -56,9 +66,114 @@ def generate_velocity(rangeResult, info_dict):
     intensities_peaks = [[range_abs_combined_nparray_collapsed[idx], idx] for idx in peaks]
     peaks = [i[1] for i in sorted(intensities_peaks, reverse=True)[:3]]
     dopplerResult = dopplerFFT(rangeResult)
-    vel_array_frame = np.array(get_velocity(rangeResult, peaks, info_dict)).flatten()
+    ranges, varticle_dist = find_l_r(veloity_peaks, frame_pcd)
+    vel_array_frame = np.array(get_velocity(rangeResult, peaks, varticle_dist)).flatten()
     mean_velocity = np.median(vel_array_frame)
     return mean_velocity
+
+
+def generate_pcd_and_speed(file):
+    file_name = file.split('/')[-1]
+    info_dict = get_info(file_name)
+    NUM_FRAMES = info_dict['Nf'][0]
+    with open(file, 'rb') as ADCBinFile: 
+        frames = np.frombuffer(ADCBinFile.read(cfg.FRAME_SIZE*4*NUM_FRAMES), dtype=np.uint16)
+    all_data = frame_reshape(frames, NUM_FRAMES)
+    range_azimuth = np.zeros((cfg.ANGLE_BINS, cfg.BINS_PROCESSED))
+    num_vec, steering_vec = dsp.gen_steering_vec(cfg.ANGLE_RANGE, cfg.ANGLE_RES, cfg.VIRT_ANT)
+    tracker = EKF()
+    count = 0
+    pcd_datas = []
+    velocities = []
+    for adc_data in all_data:
+        count+=1
+        print("Frame No. ", count)
+        radar_cube = dsp.range_processing(adc_data)
+        mean = radar_cube.mean(0)                 
+        radar_cube = radar_cube - mean  
+        # --- capon beamforming
+        beamWeights   = np.zeros((cfg.VIRT_ANT, cfg.BINS_PROCESSED), dtype=np.complex128)
+        radar_cube = np.concatenate((radar_cube[0::3,...], radar_cube[1::3,...], radar_cube[2::3,...]), axis=1)
+        # Note that when replacing with generic doppler estimation functions, radarCube is interleaved and
+        # has doppler at the last dimension.
+        for i in range(cfg.BINS_PROCESSED):
+            range_azimuth[:,i], beamWeights[:,i] = dsp.aoa_capon(radar_cube[:, :, i].T, steering_vec, magnitude=True)
+        
+        """ 3 (Object Detection) """
+        heatmap_log = np.log2(range_azimuth)
+        
+        # --- cfar in azimuth direction
+        first_pass, _ = np.apply_along_axis(func1d=dsp.ca_,
+                                            axis=0,
+                                            arr=heatmap_log,
+                                            l_bound=1.5,
+                                            guard_len=4,
+                                            noise_len=16)
+        
+        # --- cfar in range direction
+        second_pass, noise_floor = np.apply_along_axis(func1d=dsp.ca_,
+                                                    axis=0,
+                                                    arr=heatmap_log.T,
+                                                    l_bound=2.5,
+                                                    guard_len=4,
+                                                    noise_len=16)
+
+        # --- classify peaks and caclulate snrs
+        noise_floor = noise_floor.T
+        first_pass = (heatmap_log > first_pass)
+        second_pass = (heatmap_log > second_pass.T)
+        peaks = (first_pass & second_pass)
+        peaks[:cfg.SKIP_SIZE, :] = 0
+        peaks[-cfg.SKIP_SIZE:, :] = 0
+        peaks[:, :cfg.SKIP_SIZE] = 0
+        peaks[:, -cfg.SKIP_SIZE:] = 0
+        pairs = np.argwhere(peaks)
+        values, counts = np.unique(pairs[:,1], return_counts=True)
+        veloity_peaks = values[np.argsort(counts)[-3:]]
+        azimuths, ranges = pairs.T
+        snrs = heatmap_log[pairs[:,0], pairs[:,1]] - noise_floor[pairs[:,0], pairs[:,1]]
+
+        """ 4 (Doppler Estimation) """
+
+        # --- get peak indices
+        # beamWeights should be selected based on the range indices from CFAR.
+        dopplerFFTInput = radar_cube[:, :, ranges]
+        beamWeights  = beamWeights[:, ranges]
+
+        # --- estimate doppler values
+        # For each detected object and for each chirp combine the signals from 4 Rx, i.e.
+        # For each detected object, matmul (numChirpsPerFrame, numRxAnt) with (numRxAnt) to (numChirpsPerFrame)
+        dopplerFFTInput = np.einsum('ijk,jk->ik', dopplerFFTInput, beamWeights)
+        if not dopplerFFTInput.shape[-1]:
+            continue
+        dopplerEst = np.fft.fft(dopplerFFTInput, axis=0)
+        dopplerEst = np.argmax(dopplerEst, axis=0)
+        dopplerEst[dopplerEst[:]>=cfg.NUM_CHIRPS/2] -= cfg.NUM_CHIRPS
+        
+        """ 5 (Extended Kalman Filter) """
+
+        # --- convert bins to units
+        ranges = ranges * cfg.RANGE_RESOLUTION
+        azimuths = (azimuths - (cfg.ANGLE_BINS // 2)) * (np.pi / 180)
+        dopplers = dopplerEst * cfg.DOPPLER_RESOLUTION
+        snrs = snrs
+        
+        # --- put into EKF
+        tracker.update_point_cloud(ranges, azimuths, dopplers, snrs)
+        targetDescr, tNum = tracker.step()
+        frame_pcd = np.zeros((len(tracker.point_cloud),6))
+        for point_cloud, idx in zip(tracker.point_cloud, range(len(tracker.point_cloud))):
+            frame_pcd[idx,0] = -np.sin(point_cloud.angle) * point_cloud.range
+            frame_pcd[idx,1] = np.cos(point_cloud.angle) * point_cloud.range
+            frame_pcd[idx,2] = point_cloud.doppler 
+            frame_pcd[idx,3] = point_cloud.snr
+            frame_pcd[idx,4] = point_cloud.range
+            frame_pcd[idx,5] = point_cloud.angle
+        pcd_datas.append(frame_pcd)
+        velocity = generate_velocity(radar_cube, frame_pcd, veloity_peaks)
+        print("velocity: ", velocity)
+        velocities.append(velocity)
+    return np.array(pcd_datas), np.array(velocities)
         
 def frame_reshape(frames, NUM_FRAMES):
     adc_data = frames.reshape(NUM_FRAMES, -1)
