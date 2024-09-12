@@ -1,3 +1,6 @@
 [submodule "OpenRadar"]
 	path = OpenRadar
 	url = https://github.com/arghasen10/OpenRadar.git
+[submodule "radarize_ae"]
+	path = radarize_ae
+	url = https://github.com/arghasen10/radarize_ae.git

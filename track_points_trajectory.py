@@ -1,12 +1,8 @@
 from helper import *
 import matplotlib.pyplot as plt
-from collections import defaultdict
-from sklearn.metrics.pairwise import haversine_distances
-from math import radians
 import glob
-from pcd_generator import generate_pcd
 import pickle
-import math
+import os
 
 
 def get_traj(P1, P2, v_b, t, prev_point):
