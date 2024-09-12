@@ -70,6 +70,7 @@ def generate_pcd_and_speed(file):
     count = 0
     pcd_datas = []
     velocities = []
+    prev_frame_pcd = None
     for adc_data in all_data:
         count+=1
         print("Frame No. ", count)
@@ -154,10 +155,14 @@ def generate_pcd_and_speed(file):
             frame_pcd[idx,3] = point_cloud.snr
             frame_pcd[idx,4] = point_cloud.range
             frame_pcd[idx,5] = point_cloud.angle
+        if prev_frame_pcd is None:
+            prev_frame_pcd = frame_pcd
+            continue
         pcd_datas.append(frame_pcd)
-        velocity = generate_velocity(radar_cube, frame_pcd, veloity_peaks)
+        velocity = generate_velocity(radar_cube, prev_frame_pcd, veloity_peaks)
         print("velocity: ", velocity)
         velocities.append(velocity)
+        prev_frame_pcd = frame_pcd
     return np.array(pcd_datas), np.array(velocities)
         
 def frame_reshape(frames, NUM_FRAMES):
