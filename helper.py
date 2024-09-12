@@ -67,7 +67,7 @@ def generate_velocity(rangeResult, frame_pcd, veloity_peaks):
     peaks = [i[1] for i in sorted(intensities_peaks, reverse=True)[:3]]
     dopplerResult = dopplerFFT(rangeResult)
     ranges, varticle_dist = find_l_r(veloity_peaks, frame_pcd)
-    vel_array_frame = np.array(get_velocity(rangeResult, peaks, varticle_dist)).flatten()
+    vel_array_frame = np.array(get_velocity(rangeResult, veloity_peaks, varticle_dist)).flatten()
     mean_velocity = np.median(vel_array_frame)
     return mean_velocity
 
@@ -286,14 +286,14 @@ def get_phase(r,i):
     return phase
 
 
-def solve_equation(phase_cur_frame,info_dict):
+def solve_equation(phase_cur_frame,peak,varticle_dist):
     phase_diff=[]
     for iter in range (1,len(phase_cur_frame)):
         phase_diff.append(phase_cur_frame[iter]-phase_cur_frame[iter-1])
     Tp=cfg.Tp
     Tc=cfg.Tc
-    L=info_dict['L'][0]/100
-    r0=info_dict['R'][0]/100
+    L=varticle_dist
+    r0=peak*cfg.RANGE_RESOLUTION
     roots_of_frame=[]
     for i,val in enumerate(phase_diff):
         c=(phase_diff[i]*0.001/3.14)/(3*(Tp+Tc))
@@ -314,7 +314,7 @@ def solve_equation(phase_cur_frame,info_dict):
     return np.mean(final_roots)
 
 
-def get_velocity_antennawise(range_FFT_,peak, info_dict):
+def get_velocity_antennawise(range_FFT_,peak, varticle_dist):
         phase_per_antenna=[]
         vel_peak=[]
         for k in range(0,cfg.NUM_CHIRPS):
@@ -323,17 +323,17 @@ def get_velocity_antennawise(range_FFT_,peak, info_dict):
             phase=get_phase(r,i)
             phase_per_antenna.append(phase)
         phase_cur_frame=phase_unwrapping(len(phase_per_antenna),phase_per_antenna)
-        cur_vel=solve_equation(phase_cur_frame,info_dict)
+        cur_vel=solve_equation(phase_cur_frame,peak,varticle_dist)
         return cur_vel
 
 
-def get_velocity(rangeResult,range_peaks,info_dict):
+def get_velocity(rangeResult,range_peaks,varticle_dist):
     vel_array_frame=[]
-    for peak in range_peaks:
+    for peak,v_dist in zip(range_peaks, varticle_dist):
         vel_arr_all_ant=[]
         for i in range(0,cfg.NUM_TX):
             for j in range(0,cfg.NUM_RX):
-                cur_velocity=get_velocity_antennawise(rangeResult[i][j],peak,info_dict)
+                cur_velocity=get_velocity_antennawise(rangeResult[i][j],peak,v_dist)
                 vel_arr_all_ant.append(cur_velocity)
         vel_array_frame.append(vel_arr_all_ant)
     return vel_array_frame
