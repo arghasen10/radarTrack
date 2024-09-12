@@ -67,6 +67,8 @@ if __name__ == "__main__":
                 for point2 in prev_pointclouds:
                     if eclid(point2, (0,0)) < 0.05: 
                         continue
+                    if point1[1] < point2[1]:
+                        continue
                     distance = eclid(point1, point2)
                     if distance < 0.05:
                         new_traj_point = get_traj(point1, point2,v_b, 0.2, prev_traj_point)
