@@ -1,28 +1,13 @@
 import struct
-import pickle
 import numpy as np
 import configuration as cfg
-from matplotlib.colors import LinearSegmentedColormap
-import matplotlib.pyplot as plt
-# import tensorflow as tf
-import seaborn as sns
 import argparse
 import pandas as pd
-import subprocess
 import statistics
 from scipy.signal import find_peaks
-from sklearn.model_selection import train_test_split
 from mmwave.dataloader import DCA1000
-import mmwave as mm
 import mmwave.dsp as dsp
-from mmwave.dataloader import DCA1000
 from mmwave.tracking import EKF
-from mmwave.tracking import gtrack_visualize
-import matplotlib.pyplot as plt
-import cv2
-import os
-import time
-import glob
 
 
 def read8byte(x):
@@ -218,53 +203,6 @@ def print_info(info_dict):
     print(f'--PWM Value: {info_dict[" PWM"][0]}')
     print(f'--A brief desciption: {info_dict[" Description"][0]}')
     print('***************************************************************')
-
-
-def iterative_range_bins_detection(rangeResult,pointcloud_processcfg):
-    if pointcloud_processcfg.enableStaticClutterRemoval:
-        rangeResult = clutter_removal(rangeResult, axis=2)
-    range_result_absnormal_split=[]
-    for i in range(pointcloud_processcfg.frameConfig.numTxAntennas):
-        for j in range(pointcloud_processcfg.frameConfig.numRxAntennas):
-            r_r=np.abs(rangeResult[i][j])
-            r_r[:,0:10]=0
-            min_val = np.min(r_r)
-            max_val = np.max(r_r)
-            r_r_normalise = (r_r - min_val) / (max_val - min_val) * (1000 - 0) + 0
-            range_result_absnormal_split.append(r_r_normalise)
-    
-    range_abs_combined_nparray=np.zeros((pointcloud_processcfg.frameConfig.numLoopsPerFrame,pointcloud_processcfg.frameConfig.numADCSamples))
-    for ele in range_result_absnormal_split:
-        range_abs_combined_nparray+=ele
-    range_abs_combined_nparray/=(pointcloud_processcfg.frameConfig.numTxAntennas*pointcloud_processcfg.frameConfig.numRxAntennas)
-    
-    range_abs_combined_nparray_collapsed=np.sum(range_abs_combined_nparray,axis=0)/pointcloud_processcfg.frameConfig.numLoopsPerFrame
-    peaks_min_intensity_threshold = np.argsort(range_abs_combined_nparray_collapsed)[::-1][:5]
-    max_range_index=np.argmax(range_abs_combined_nparray_collapsed)
-    return max_range_index, peaks_min_intensity_threshold
-
-
-def iterative_doppler_bins_selection(dopplerResult,pointcloud_processcfg,range_peaks, max_range_index):
-    doppler_result_absnormal_split=[]
-    for i in range(pointcloud_processcfg.frameConfig.numTxAntennas):
-        for j in range(pointcloud_processcfg.frameConfig.numRxAntennas):
-            d_d=np.abs(dopplerResult[i][j])
-            d_d[:,0:10]=0
-            min_val = np.min(d_d)
-            max_val = np.max(d_d)
-            d_d_normalise = (d_d - min_val) / (max_val - min_val) * (1000 - 0) + 0
-            doppler_result_absnormal_split.append(d_d_normalise)
-    
-    doppler_abs_combined_nparray=np.zeros((pointcloud_processcfg.frameConfig.numLoopsPerFrame,pointcloud_processcfg.frameConfig.numADCSamples))
-    for ele in doppler_result_absnormal_split:
-        doppler_abs_combined_nparray+=ele
-    doppler_abs_combined_nparray/=(pointcloud_processcfg.frameConfig.numTxAntennas*pointcloud_processcfg.frameConfig.numRxAntennas)
-    
-    vel_idx=[]
-    for peak in range_peaks:
-        vel_idx.append(np.argmax(doppler_abs_combined_nparray[:,peak])-91)
-    max_doppler_index = np.argmax(doppler_abs_combined_nparray[:,max_range_index])-91
-    return max_doppler_index, vel_idx
 
 
 def get_phase(r,i):
