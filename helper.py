@@ -310,7 +310,11 @@ def run_data_read_only_sensor(parent_path,info_dict):
 
 def get_bin_file(filename):
     info_dict = get_info(filename.split("/")[-1])
+    try:
+        filepath = info_dict["filename"][0]
+    except IndexError as e:
+        return None
     parent_path='/'.join(filename.split("/")[0:-1])
-    filename = parent_path+'/'+info_dict["filename"][0]
+    filename = parent_path+'/' + filepath
     bin_filename = run_data_read_only_sensor(parent_path,info_dict)
     return bin_filename, info_dict

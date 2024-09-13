@@ -106,7 +106,10 @@ def create_radar_doppler_elevation(
 
 
 def create_dataset(file):
-    bin_filename, info_dict = get_bin_file(file)
+    gb = get_bin_file(file)
+    if gb is None:
+        return None
+    bin_filename, info_dict = gb
     NUM_FRAMES = info_dict['Nf'][0]
     with open(bin_filename, 'rb') as ADCBinFile: 
         frames = np.frombuffer(ADCBinFile.read(cfg.FRAME_SIZE*4*NUM_FRAMES), dtype=np.uint16)
@@ -123,9 +126,11 @@ def create_dataset(file):
     
 
 if __name__ == "__main__":
-    radar_buffer_len = 3
     files = glob.glob("../mmPhase/datasets/*.bin")
     files = [file for file in files if not file.split('/')[-1].startswith("only_sensor")]
     for file in files:
         print("Processing file ", file)
         npz_file = create_dataset(file)
+        if npz_file is None:
+            print("Skipped file", file)
+            continue
