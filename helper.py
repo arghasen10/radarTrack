@@ -5,6 +5,7 @@ import argparse
 import pandas as pd
 import statistics
 from scipy.signal import find_peaks
+import subprocess
 from mmwave.dataloader import DCA1000
 import mmwave.dsp as dsp
 from mmwave.tracking import EKF
@@ -299,3 +300,10 @@ def get_mode_velocity(velocity_array_framewise):
             vel_array_all.append(velocity)
     vel_mode = statistics.mode(vel_array_all)
     return vel_mode
+
+def run_data_read_only_sensor(parent_path,info_dict):
+    filename = parent_path+'/'+info_dict["filename"][0]
+    command =f'python data_read_only_sensor.py {filename} {info_dict["Nf"][0]}'
+    process = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    stdout = process.stdout
+    stderr = process.stderr

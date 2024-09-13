@@ -3,3 +3,6 @@ dataset.csv
 **/*.pkl
 **/*.png
 **/*.gif
+**/.eggs/
+**/*.jpg
+**/*.npz
