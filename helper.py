@@ -59,8 +59,7 @@ def generate_velocity(rangeResult, frame_pcd, veloity_peaks):
 
 
 def generate_pcd_and_speed(file):
-    file_name = file.split('/')[-1]
-    info_dict = get_info(file_name)
+    bin_filename, info_dict = get_bin_file(file)
     NUM_FRAMES = info_dict['Nf'][0]
     with open(file, 'rb') as ADCBinFile: 
         frames = np.frombuffer(ADCBinFile.read(cfg.FRAME_SIZE*4*NUM_FRAMES), dtype=np.uint16)
@@ -307,3 +306,11 @@ def run_data_read_only_sensor(parent_path,info_dict):
     process = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     stdout = process.stdout
     stderr = process.stderr
+    return filename
+
+def get_bin_file(filename):
+    info_dict = get_info(filename.split("/")[-1])
+    parent_path='/'.join(filename.split("/")[0:-1])
+    filename = parent_path+'/'+info_dict["filename"][0]
+    bin_filename = run_data_read_only_sensor(parent_path,info_dict)
+    return bin_filename, info_dict
