@@ -114,6 +114,8 @@ def create_dataset(file):
     with open(bin_filename, 'rb') as ADCBinFile: 
         frames = np.frombuffer(ADCBinFile.read(cfg.FRAME_SIZE*4*NUM_FRAMES), dtype=np.uint16)
     all_data = frame_reshape(frames, NUM_FRAMES)
+    if all_data is None:
+        return None
     da_heatmaps = create_radar_doppler(all_data)
     da_e_heatmaps = create_radar_doppler_elevation(all_data)
     frames = defaultdict(lambda: [])
@@ -128,6 +130,8 @@ def create_dataset(file):
 if __name__ == "__main__":
     files = glob.glob("../mmPhase/datasets/*.bin")
     files = [file for file in files if not file.split('/')[-1].startswith("only_sensor")]
+    files = [file for file in files if 'stick_' not in file]
+    files = [file for file in files if 'drone' not in file]
     for file in files:
         print("Processing file ", file)
         npz_file = create_dataset(file)

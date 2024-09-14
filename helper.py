@@ -64,6 +64,8 @@ def generate_pcd_and_speed(file):
     with open(file, 'rb') as ADCBinFile: 
         frames = np.frombuffer(ADCBinFile.read(cfg.FRAME_SIZE*4*NUM_FRAMES), dtype=np.uint16)
     all_data = frame_reshape(frames, NUM_FRAMES)
+    if all_data is None:
+        return None
     range_azimuth = np.zeros((cfg.ANGLE_BINS, cfg.BINS_PROCESSED))
     num_vec, steering_vec = dsp.gen_steering_vec(cfg.ANGLE_RANGE, cfg.ANGLE_RES, cfg.VIRT_ANT)
     tracker = EKF()
@@ -166,7 +168,10 @@ def generate_pcd_and_speed(file):
     return np.array(pcd_datas), np.array(velocities)
         
 def frame_reshape(frames, NUM_FRAMES):
-    adc_data = frames.reshape(NUM_FRAMES, -1)
+    try:
+        adc_data = frames.reshape(NUM_FRAMES, -1)
+    except ValueError as e:
+        return None
     all_data = np.apply_along_axis(DCA1000.organize, 1, adc_data, num_chirps=cfg.NUM_CHIRPS*cfg.NUM_TX, num_rx=cfg.NUM_RX, num_samples=cfg.NUM_ADC_SAMPLES)
     return all_data
 
